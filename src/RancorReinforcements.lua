@@ -444,10 +444,16 @@ local K = {}
 -- menus, no item giver, sdk.hook left alone; the reinforcements and their boss fixes work exactly the same.
 K.RELEASE = false
 -- every fs.write in this script goes through here (the release build writes no files; its settings use json)
-local fs = setmetatable({ write = function(...) if K.RELEASE then return true end return _G.fs.write(...) end }, { __index = _G.fs })
+-- v1.9.185: the release build writes the one small event log again (config.write_log). The Nexus reports
+-- could not be diagnosed without it, and it is a couple of dozen lines per fight, flushed every 2 s.
+K.WRITE_LOG = true
+local fs = setmetatable({ write = function(name, ...)
+    if K.RELEASE and not (K.WRITE_LOG and name == K.LOG_FILE) then return true end
+    return _G.fs.write(name, ...)
+end }, { __index = _G.fs })
 K.CONFIG_FILE = "RancorReinforcements.json"
 K.LOG_FILE    = "RancorReinforcements_log.txt"
-local VERSION     = "v1.9.184"
+local VERSION     = "v1.9.192"
 -- v1.9.58: record every hooked game function's address (to identify the crash's hook from the crash log)
 RR_HOOK_LIST = {}
 RR_HOOK_ORIG = RR_HOOK_ORIG or sdk.hook
@@ -481,7 +487,7 @@ local REINFORCEMENTS = {
     -- Medusa's Rancor AI fixes (battle spots, unstick, combat table, attack permission) apply; her pillar, petrify
     -- beam, frost look, bow and head/beam aim do not (the Hydra files drive its necks and breath). Never leashed:
     -- a teleport splits its body from its hitbox. One per Rancor, one alive at a time; own HP / damage settings.
-    { id = "ch255000_90", key = "hydra", name = "Hydra", can_fly = false, chance = 0.2, regular_only = true,
+    { id = "ch255000_90", key = "hydra", name = "Hydra", can_fly = false, chance = 0.2,   -- v1.9.189: any Rancor
       max_per_event = 1, max_alive = 1, no_leash = true, needs = "hydra", hp_key = "hydra_hp", atk_key = "hydra_attack" },
     -- Gagana (ch253012_00, Griffin family, own HP 200,000). Confirmed working in a Rancor 2026-10-13.
     -- v1.9.66: max 1 per Rancor event (setting) and never more than one alive at a time.
@@ -514,8 +520,10 @@ local REINFORCEMENTS = {
     -- catalog (it never spawned; the _50/_51/_53 IDs are unused). The Golem that IS the Dark Arisen content is
     -- ch252000_13: its prefab's think table, status and parameters live in ch252/000/050 (Contents0014 data, the
     -- brine set - like the Brine Cyclops' ch250/000/50), own HP 59,800, 5 bar segments. The plain Golem is out.
+    -- v1.9.189 (user 19:15): every boss can turn up in any Rancor. Only Medusa is kept out of the Devouring
+    -- one (her pillar clashes with the Purgener's), and the finale-only picks stay finale-only.
     { id = "ch252000_13", key = "brine_golem", name = "Brine Golem", can_fly = false, chance = 0.2,
-      max_per_event = 1, max_alive = 1, regular_only = true,
+      max_per_event = 1, max_alive = 1,
       hp_mult_key = "brine_golem_hp_mult", atk_key = "brine_golem_attack" },
     -- v1.9.144 (user): Drake (ch257000_00, flies). Shares the regular / Virulent finale roll with the Evil Eye
     -- and the Thimble (the ice dragon ch257003): one even share each by default. Gets the Thimble's HP, guard,
@@ -560,11 +568,15 @@ local REINFORCEMENTS = {
       native_hp = 360000 },
     { id = "ch250000_51", key = "brine_cyclops", name = "Brine Cyclops", can_fly = false, chance = 0.2 },
     { id = "ch257000_50", key = "drake", name = "Brine Drake", can_fly = true, chance = 0, max_per_event = 1, max_alive = 1,
-      finale_only = true, match_native = true, native_of = "ch257003_", variant_label = "Thimble (ice dragon)",
-      native_default_hp = 150000.0 },
+      -- v1.9.192 (user 00:37): the Drake no longer copies the Thimble. It could only ever learn a Thimble's
+      -- stats from a Rancor kind where the ice dragon is allowed to stay, and in a Virulent Rancor it never is -
+      -- so it fell back to the one sample it had (a Devouring Thimble: 156,000 HP, no guard, x1.0 damage) and
+      -- came out weaker than the wave bosses and weaker than its own species. It keeps its own 216,000 now and
+      -- takes the standard guard and damage like every other reinforcement.
+      finale_only = true, native_hp = 216000 },
     -- v1.9.99: Golem (ch252000_00, ground). Regular (non-Devouring) Rancors only, double size, ~1,000,000 HP (user).
     { id = "ch252000_00", key = "golem", name = "Golem", can_fly = false, chance = 0.2, max_per_event = 1, max_alive = 1,
-      regular_only = true, hp_mult_key = "golem_hp_mult", atk_key = "golem_attack",
+      hp_mult_key = "golem_hp_mult", atk_key = "golem_attack",   -- v1.9.189: any Rancor (still off)
       off = true },   -- v1.9.160 (user): replaced by the Brine Golem   -- v1.9.106: normal size, 3x its own HP
     -- v1.9.141 (user): Rancor-only VARIANTS - not part of the reinforcement pool or the per-Rancor count. A Rancor's own
     -- Skeleton Lord / Norgan Lich slot becomes the Brine version at its chance (50%). The last boss wave stays the game's.
@@ -577,6 +589,15 @@ local REINFORCEMENTS = {
     { id = "ch227000_10", key = "brine_lich", name = "Brine Lich", can_fly = true, chance = 0.5,
       variant_of = "ch227002_", variant_label = "Norgan Lich", match_native = true, native_default_hp = 120000.0, no_leash = true },
 }
+
+-- v1.9.189 (user 19:20): the Hydra port is experimental and is NEVER part of a release build - it is not in
+-- the pool, not in the menu and not in the startup list. The dev build keeps it, still gated on its own lab
+-- files reporting ready (needs = "hydra" / K.hydra_ready), so experimenting with it is unaffected.
+if K.RELEASE then
+    for _, rf in ipairs(REINFORCEMENTS) do
+        if rf.key == "hydra" then rf.off = true end
+    end
+end
 
 -- MAJOR Rancor wave enemies (the big health-bar ones) whose slots may be swapped.
 -- MINOR Rancor wave enemies whose slots may become Evil Eye minions.
@@ -743,6 +764,28 @@ default_config.eye_force_minions = 0   -- v1.9.170 created minions - OFF since v
 default_config.eye_swarm = true   -- v1.9.177: while our Evil Eye is alive EVERY small Rancor enemy becomes one of its eyeball minions; they die with it
 default_config.eye_arrival_minions = 5   -- v1.9.174: extra eyeball minions (wave / nearby takeovers) the moment our Evil Eye arrives
 default_config.eye_parts_arena = true   -- v1.9.169: Evil Eye ground tentacles come up on spots inside the arena (off = that move's tentacles are cancelled)
+-- v1.9.185 (Nexus crash reports): see K.SAFE
+default_config.no_escape = true          -- no reinforcement ever decides to flee the arena (EscapeController.IsNoEscape)
+default_config.stray_kill = true         -- a reinforcement that ends up unreachable dies instead of hanging the Rancor
+default_config.stray_dist = 120.0        -- unreachable beyond this many m from BOTH the arena center and you
+default_config.stray_dist_devour = 220.0 -- ...in the Devouring Rancor
+default_config.stray_height = 120.0      -- ...or this many m above the arena
+default_config.stray_secs = 12.0         -- ...for this long
+-- v1.9.191: the dev build's per-frame move / AI-row watcher (Griffin, Gagana, Evil Eye, both Liches) used to
+-- run on every dev build with no way to switch it off. It is research instrumentation, it is absent from the
+-- release build, and it was running flat out before both the 20:01 and 00:12 ImGui crashes. Off by default now,
+-- so a dev build used for play-testing behaves like the shipped one unless you ask for the research.
+default_config.move_watch = false
+default_config.stray_gone_secs = 15.0    -- v1.9.190: a reinforcement must be missing from the scan for this
+                                         -- long, AND its object must actually be invalid, before it counts as gone
+default_config.eye_swarm_max = 24        -- most eyeball minions alive at once (0 = no cap)
+default_config.write_log = false         -- v1.9.185 (user 10:14): the release build writes NO files by default.
+                                         -- The checkbox turns the event log on when a bug report needs one.
+                                         -- (the dev build always logs, whatever this says)
+-- v1.9.187: the finale pool used to ride the ice dragon's slot ONLY, so a Rancor whose own last boss is
+-- something else got no finale boss at all. With this on, the finale roll takes whatever big enemy the game
+-- puts in its last boss wave. Satanica, Death and the Devouring finales keep their own handling.
+default_config.finale_takes_last_boss = true
 default_config.eye_tele_phase = true         -- v1.9.135: Evil Eye teleport phase: you and each pawn in turn, an attack between teleports, regrow at the end
 default_config.gagana_swoops = true          -- v1.9.129: unlock the Gagana's swoop attacks in Rancors (its "行動解禁" AI flag)
 default_config.hold_end = true               -- v1.9.127: the Rancor doesn't end (and wipe the field) while our reinforcements are still alive
@@ -837,17 +880,51 @@ local function safe(fn)
     return nil
 end
 
--- keep the previous session's log (a crash + restart would otherwise overwrite it)
+-- keep the previous session's log (a crash + restart would otherwise overwrite it), then start a fresh one
+-- v1.9.185: the dev build always writes its log; the release build only when config.write_log is ticked
+function K.log_on() return (not K.RELEASE) or config.write_log == true end
+K.WRITE_LOG = K.log_on()
 pcall(function()
-    local prev = fs.read(K.LOG_FILE)
-    if prev and #prev > 0 then fs.write("RancorReinforcements_log_prev.txt", prev) end
+    if not K.WRITE_LOG then return end   -- the log is switched off: leave the file alone
+    local prev = _G.fs.read(K.LOG_FILE)
+    if prev and #prev > 0 then _G.fs.write("RancorReinforcements_log_prev.txt", prev) end
+    _G.fs.write(K.LOG_FILE, "")
 end)
+-- v1.9.185b: the log is APPENDED, not rewritten. Measured in the running game (09:59): fs.write of the whole
+-- buffer costs 5.1 ms whatever its size (it is the open/flush, not the bytes) - 31 % of a 60 fps frame, every
+-- 2 s, which is the same shape as the "stutter every couple of seconds" players reported in v1.9.156. One
+-- io.open(name, "a") of just the new lines costs 0.45 ms, and relative names land in reframework/data the
+-- same as fs.write. So: append the new lines only, every 5 s, and never touch the rest of the file.
 local log_lines, file_lines = {}, {}
 local log_dirty, last_log_write = true, 0
+local log_queue, log_bytes = {}, 0
+local function log_flush()
+    if #log_queue == 0 then return end
+    local chunk = table.concat(log_queue, "\n") .. "\n"
+    log_queue = {}
+    if not K.WRITE_LOG then return end
+    local ok = pcall(function()
+        local f = io.open(K.LOG_FILE, "a")
+        if not f then error("could not open") end
+        f:write(chunk); f:close()
+    end)
+    if ok then
+        log_bytes = log_bytes + #chunk
+        -- a very long session: start the file over from the lines still in memory
+        if log_bytes > 4 * 1024 * 1024 then
+            log_bytes = 0
+            pcall(function()
+                local f = io.open(K.LOG_FILE, "w")
+                if f then f:write(table.concat(file_lines, "\n") .. "\n"); f:close() end
+            end)
+        end
+    end
+end
 local function log(msg)
     local line = os.date("%H:%M:%S ") .. msg
     table.insert(log_lines, 1, line)
     if #log_lines > 14 then table.remove(log_lines) end
+    table.insert(log_queue, line)
     table.insert(file_lines, line)
     if #file_lines > 2000 then table.remove(file_lines, 1) end
     log_dirty = true
@@ -855,7 +932,8 @@ end
 -- write the log file right now (for steps that might crash the game)
 local function log_now(msg)
     log(msg)
-    pcall(fs.write, K.LOG_FILE, table.concat(file_lines, "\n"))
+    log_dirty = false
+    pcall(log_flush)   -- v1.9.185b: appends the queued lines only (0.45 ms), for steps that might crash the game
 end
 
 local id_value, id_name = {}, {}
@@ -937,8 +1015,27 @@ function K.rancor_kind()
     local id = mgr and tonumber(safe(function() return mgr:call("get_ProcessingVoidEventID") end))
     local kind = nil
     if id and id >= 0 then
+        -- v1.9.187: the game classifies its own Rancors. app.AppraiseCycleDefine.VoidEventType is
+        -- Invalid -1 / Normal 0 / Middle 1 / High 2 = regular / Virulent / Devouring, and the manager
+        -- answers isMiddleVoidEvent(ID) and IsProcessingHighLevelVoid. Checked against all 50 Rancor IDs
+        -- in app.AppraiseCycleDefine.ID: 18 are Middle, and the old "id %% 100 >= 50" rule agreed on every
+        -- one of them - so this is not a bug fix, it is future-proofing against a patch or DLC adding an ID
+        -- that does not follow the numbering. The old rule stays as the fallback if the calls ever fail.
         local high = safe(function() return mgr:call("get_IsProcessingHighLevelVoid") end)
-        if id == 3606 or high == true then kind = "devour" elseif id % 100 >= 50 then kind = "virulent" else kind = "regular" end
+        if high ~= true then
+            local b = safe(function() return mgr:call("isProcessingHighLevelVoidBattle") end)
+            if b == true then high = true end
+        end
+        local mid = safe(function() return mgr:call("isMiddleVoidEvent", id) end)
+        if mid == nil then mid = safe(function() return mgr:call("isMiddleVoidEvent(app.AppraiseCycleDefine.ID)", id) end) end
+        if high == true then kind = "devour"
+        elseif mid == true then kind = "virulent"
+        elseif mid == false then kind = "regular"
+        else   -- the game did not answer: fall back to v1.9.124's numbering rule
+            if id == 3606 then kind = "devour" elseif id % 100 >= 50 then kind = "virulent" else kind = "regular" end
+            if not K.KIND.fellback then K.KIND.fellback = true
+                log("Rancor kind: the game's own isMiddleVoidEvent did not answer - using the ID numbering instead") end
+        end
     end
     K.KIND.kind, K.KIND.id = kind, id
     return kind, id
@@ -1413,6 +1510,7 @@ end
 
 -- v1.9.157: the Hydra files are loaded and have ch255000_90 pointed at the Hydra prefab
 function K.hydra_ready()
+    if K.RELEASE then return false end   -- v1.9.189 (user 19:20): never in the release build
     local H = rawget(_G, "HYDRA_MODE")
     if type(H) ~= "table" or not H.on or type(H.ready) ~= "function" then return false end
     local ok, r = pcall(H.ready)
@@ -1437,7 +1535,7 @@ local function pick_reinforcement(flying_slot)
         local pend = (os.clock() - (rf.last_swap_t or -100) < 15) and 1 or 0   -- swapped but maybe not spawned yet
         local alive_ok = not rf.max_alive or (rf.alive_n or 0) + pend < rf.max_alive
         if rf.devour_only and not DEVOUR.active then alive_ok = false end
-        if rf.regular_only and DEVOUR.active then alive_ok = false end   -- v1.9.99 (Golem), v1.9.123 (Medusa)
+        if rf.regular_only and DEVOUR.active then alive_ok = false end   -- v1.9.189: Medusa only
         if rf.final_boss or rf.off or rf.variant_of or rf.finale_only then alive_ok = false end   -- v1.9.141/144: variants and finale monsters have their own roll
         if rf.needs == "hydra" and not K.hydra_ready() then alive_ok = false end   -- v1.9.157: only with the Hydra files loaded
         local w = tonumber(config[rf.key .. "_chance"]) or 0
@@ -1653,6 +1751,7 @@ local function try_minion(info)
     -- tentacle turrets - the game copies the record for each ghoul of the group). Put copies back to the original.
     -- v1.9.177 (user 15:51): while our Eye is alive every small Rancor enemy becomes one of its eyeball minions
     local swarm = config.eye_swarm and (event.eyes or 0) > 0 and K.eye_alive and K.eye_alive() and id_value[K.MINION_ID] ~= nil
+        and not (K.swarm_full and K.swarm_full())   -- v1.9.185: eye_swarm_max
     if swarm and (cur_name == "ch272002_00" or cur_name == K.MINION_ID) and os.clock() - (K.MINOR_SWAP_T or -100) < 5 then
         -- a copy of the slot we just swapped: in a swarm it stays an eyeball (a tentacle copy becomes one too)
         pcall(function() id_obj._SelectedCharacterID = id_value[K.MINION_ID] end)
@@ -1773,6 +1872,26 @@ local function try_swap(info)
     if ice then
         if DEVOUR.active then return end
         major, flying_slot = "Thimble (final boss)", true
+    end
+    -- v1.9.187 (user 12:00, a Virulent Rancor with no finale boss): its large waves were ch254001_60,
+    -- ch223004_00, ch261000_02 and ch225003_00 - no ch257003 anywhere, so the finale roll never ran and the
+    -- Rancor ended on its own Lesser Demon. The ice dragon is only ONE of the last bosses the game uses.
+    -- app.AppraiseCycleManager tells us when it is building that wave (IsProcessingVoidLastBossNode), so the
+    -- finale pool takes that slot whatever enemy is in it. The wave pool still leaves it alone (v1.9.130).
+    local lastboss = false
+    if not ice and not DEVOUR.active and config.finale_takes_last_boss then
+        local mgr0 = sdk.get_managed_singleton("app.AppraiseCycleManager")
+        local at_last = mgr0 and safe(function() return mgr0:call("get_IsProcessingVoidLastBossNode") end) == true
+        local is_devour_finale = false
+        for _, p in ipairs(K.FINALE_PREFIXES) do if cur_name:sub(1, #p) == p then is_devour_finale = true end end
+        if at_last and not is_devour_finale and cur_name:sub(1, 8) ~= "ch261001" then   -- never Satanica
+            local lbl, fly = major_info(cur_name)
+            if lbl then
+                lastboss, ice = true, true
+                major, flying_slot = "the Rancor's last boss (" .. lbl .. ")", fly and true or false
+                log("The Rancor's own last boss is " .. cur_name .. " (" .. lbl .. ") - rolling the finale pool for it")
+            end
+        end
     end
     -- v1.9.124: the Devouring finale (Rancorous Dragon Carcass / Death) - Death anywhere else is never touched
     local fin = false
@@ -1908,7 +2027,9 @@ local function try_swap(info)
     swaps_pending = swaps_pending + 1
     swaps_by_id[rf.id] = (swaps_by_id[rf.id] or 0) + 1
     last_swap_time = now
-    log(string.format("Swapped major %s (%s) -> %s", major, cur_name, rf.name))
+    -- v1.9.188: immediate flush. The 17:37 crash happened 2 s after the last buffered write, so the
+    -- swap in flight never reached disk. Spawn swaps are the step most likely to precede a crash.
+    log_now(string.format("Swapped major %s (%s) -> %s", major, cur_name, rf.name))
 end
 
 -- v1.9.124: in the Devouring Rancor's Death finale the rest of the event waits for "Death defeated"
@@ -2152,7 +2273,8 @@ do
                     -- v1.9.167: one ambient fodder record swapped to a tentacle came back as TEN tentacle requests
                     -- (12:59:29, a group of 10) - now that they can load, the copies go back to the original fodder
                     if cname and (cname == "ch272002_00" or cname == K.MINION_ID) and K.AMB_SWAP_T and os.clock() - K.AMB_SWAP_T < 2
-                        and K.AMB_SWAP_ORIG and not swapped_entries[info:get_address()] and config.eye_swarm and K.eye_alive and K.eye_alive() then
+                        and K.AMB_SWAP_ORIG and not swapped_entries[info:get_address()] and config.eye_swarm and K.eye_alive and K.eye_alive()
+                        and not (K.swarm_full and K.swarm_full()) then   -- v1.9.185: eye_swarm_max
                         -- v1.9.177 swarm: the copies are eyeballs too, placed near you
                         pcall(function() info._CommonInfo._ObjectID._SelectedCharacterID = id_value[K.MINION_ID] end)
                         local pos_orig = K.place_summon(info, K.MINION_ID)
@@ -2174,7 +2296,8 @@ do
                     -- minion / tentacle quota - same records, same copy-guard, same restore as the wave minors
                     if cname and K.rancor_gate() and (event.eyes or 0) > 0 and K.eye_alive() and not swapped_entries[info:get_address()] then
                         local fod = cname:sub(1, 9) == "ch231000_" or cname:sub(1, 10) == "ch226002_6" or cname:sub(1, 9) == "ch221006_"
-                        local want_eye = (config.eye_swarm or event.minions < config.evil_eye_minions + (event.minion_bonus or 0)) and id_value[K.MINION_ID] ~= nil
+                        local want_eye = ((config.eye_swarm and not (K.swarm_full and K.swarm_full()))   -- v1.9.185: eye_swarm_max
+                            or event.minions < config.evil_eye_minions + (event.minion_bonus or 0)) and id_value[K.MINION_ID] ~= nil
                         local want_tent = event.tentacles < (config.evil_eye_tentacles or 0) and id_value["ch272002_00"] ~= nil
                         if fod and (want_eye or want_tent) then
                             local ip = safe(function() return info._CommonInfo._InitialPosition end)
@@ -5060,8 +5183,12 @@ function PX.points_setup(t, kind)
     pcall(fs.write, file, table.concat(out, "\n"))
     local parts, sum = {}, 0
     for _, m in ipairs(medals) do table.insert(parts, string.format("r%d=%.0f", m.i, m.mx)); sum = sum + m.mx end
-    log(string.format("%s %s: %d regions, %d live weak points (%s) -> details in data/%s", kind, t.name, n, #medals,
-        table.concat(parts, " "), file))
+    if K.RELEASE then
+        log(string.format("%s %s: %d regions, %d live weak points", kind, t.name, n, #medals))
+    else
+        log(string.format("%s %s: %d regions, %d live weak points (%s) -> details in data/%s", kind, t.name, n, #medals,
+            table.concat(parts, " "), file))
+    end
     local on = ((kind == "golem" or kind == "brine_golem") and config.golem_medal_split)
         or ((kind == "purgener" or kind == "vermund") and config.purgener_points_split)
     if on and #medals > 0 then
@@ -6951,9 +7078,9 @@ do  -- log the game's own createGimmick calls (read-only) to learn its real argu
                 if PX.own_create or n >= 15 then return end
                 n = n + 1
                 local function i64(a) return safe(function() return sdk.to_int64(a) end) end
-                log(string.format("Game createGimmick #%d: id %s, flags %s, lottery %s, parent %s, callback %s, area %s, bool %s, int %s",
+                if not K.RELEASE then log(string.format("Game createGimmick #%d: id %s, flags %s, lottery %s, parent %s, callback %s, area %s, bool %s, int %s",
                     n, tostring(i64(args[3])), tostring(i64(args[6])), tostring(i64(args[7]) ~= 0), tostring(i64(args[8]) ~= 0),
-                    tostring(i64(args[9]) ~= 0), tostring(i64(args[10])), tostring(i64(args[11]) and (i64(args[11]) & 0xFF) ~= 0), tostring(i64(args[12]) and (i64(args[12]) & 0xFFFFFFFF))))
+                    tostring(i64(args[9]) ~= 0), tostring(i64(args[10])), tostring(i64(args[11]) and (i64(args[11]) & 0xFF) ~= 0), tostring(i64(args[12]) and (i64(args[12]) & 0xFFFFFFFF)))) end
             end, function(r) return r end)
         end
     end
@@ -8201,7 +8328,7 @@ function K.eye_revive_tick(now)
 end
 -- v1.9.168 (user 13:18: "no minions spawned in"): every 2 s while our Eye is up, report each of its minions / ground
 -- tentacles that exists (where, how far from you) and pull any that came out more than 40 m from you into the arena
-K.EYEMIN = { seen = {}, t = 0, n = 0 }
+K.EYEMIN = { seen = {}, t = 0, n = 0, live = 0 }
 function K.eye_minion_tick(now)
     local M = K.EYEMIN
     if now - M.t < 2 then return end
@@ -8219,6 +8346,7 @@ function K.eye_minion_tick(now)
     if alive then M.was_alive, M.dead_t = true, nil
     elseif M.was_alive and not M.dead_t then M.dead_t = now; M.killed = 0 end
     local killing = M.dead_t and now - M.dead_t < 30
+    local live = 0   -- v1.9.185: live eyeball count, for the eye_swarm_max cap
     for _, c in ipairs(find_components("app.Character")) do
         local go = safe(function() return c:call("get_GameObject") end)
         local nm = go and safe(function() return go:call("get_Name") end) or ""
@@ -8229,6 +8357,10 @@ function K.eye_minion_tick(now)
                 M.killed = (M.killed or 0) + 1
                 if M.killed <= 30 then log(string.format("Evil Eye is dead - its %s dies with it%s", nm, ok and "" or " (could not)")) end
             end
+        end
+        if nm:sub(1, 9) == "ch271000_" then
+            local h = safe(function() return c:get_Hit():call("get_Hp") end)
+            if h and h > 0 then live = live + 1 end
         end
         if nm:sub(1, 9) == "ch271000_" or nm:sub(1, 6) == "ch2720" then
             local a = safe(function() return go:get_address() end)
@@ -8244,6 +8376,187 @@ function K.eye_minion_tick(now)
             -- (v1.9.175: no pull-in teleport any more - it split them from their model and collision)
         end
     end
+    M.live = live
+    if M.live_logged ~= (live >= (tonumber(config.eye_swarm_max) or 24)) and (tonumber(config.eye_swarm_max) or 24) > 0 then
+        M.live_logged = live >= (tonumber(config.eye_swarm_max) or 24)
+        log(string.format("Evil Eye swarm: %d eyeballs alive - %s (cap %d)", live,
+            M.live_logged and "the Rancor's own small enemies stay as they are for now" or "taking over small enemies again",
+            tonumber(config.eye_swarm_max) or 24))
+    end
+end
+-- v1.9.185 (Nexus reports) -------------------------------------------------------------
+-- Two crash reports, both from a reinforcement that gets away from the arena:
+--
+--  (1) "When the Demon Eye's health is low, it tries to escape, and the game inevitably crashes no matter
+--      how many times I try. And sometimes its model disappears and seems to become invisible, but the
+--      shield's effect still remains."
+--      Every enemy carries an app.EscapeController. At low HP its checkDecisionEscape() can decide to flee,
+--      and the controller then runs updateDestroyCheck() to delete the fleeing enemy. For a Rancor Evil Eye
+--      that fights two things at once: the flee path looks for its own dungeon's escape points, which do not
+--      exist here, and the deletion runs into this mod's "don't remove a living Evil Eye at wave end" block.
+--      The controller has set_IsNoEscape(System.Boolean) - set on every reinforcement, the decision to flee
+--      is never made, so neither path is entered. (The half-gone model with its shield still up is the same
+--      split as v1.9.126: the body is moved by the flee/warp while the model stays behind.)
+--
+--  (2) "it opened the shield halfway and float away, then the rancor is end. It still alive and floating on
+--      the lake, until the game crashed."
+--      The Evil Eye and the other no_leash bosses are never pulled back, so one can drift right out of the
+--      arena, and app.AbyssAreaProcessor (the brine) then tries to kill and revive it over the water with no
+--      revive position in a Rancor. The Rancor itself cannot finish while the boss is alive, which is also
+--      what left Rancors hanging with nothing left to fight.
+--      Fix: a reinforcement that is unreachable - far outside the arena from both the center and you, or high
+--      in the sky, for stray_secs - dies (requestFallDead, the call its own summons already use), and so does
+--      one still standing after the vortex is over. Nothing is teleported: teleporting splits a model from
+--      its body (v1.9.126), which is what made the invisible Griffins and eyeballs.
+K.SAFE = { n = 0, t = -100, killed = 0 }
+function K.SAFE.kill(t, why)
+    local hp = safe(function() return t.chara:get_Hit():call("get_Hp") end)
+    if not hp or hp <= 0 then return false end
+    local ok = pcall(function() t.chara:call("requestFallDead") end)
+    K.SAFE.killed = K.SAFE.killed + 1
+    log_now(string.format("Unreachable reinforcement: %s %s - killed so the Rancor can finish%s",
+        t.name, why, ok and "" or " (could not)"))
+    return ok
+end
+function K.SAFE.limit()
+    local lim = DEVOUR.active and (tonumber(config.stray_dist_devour) or 220) or (tonumber(config.stray_dist) or 120)
+    return math.max(lim, (DEVOUR.extent or 0) + 60)
+end
+function K.SAFE.tick(now)
+    if now - K.SAFE.t < 1 then return end
+    K.SAFE.t = now
+    local pp = player_upos()
+    local c = arena_center or vortex_center or pp
+    local lim = K.SAFE.limit()
+    local secs = tonumber(config.stray_secs) or 12
+    local hmax = tonumber(config.stray_height) or 120
+    local eye_gone = false
+    for addr, t in pairs(tracked) do
+        -- (1) no reinforcement ever decides to flee
+        if config.no_escape and not t.noescape then
+            local ec = safe(function() return t.chara:get_field("EscapeCtrl") end)
+                or safe(function() return t.chara:get_field("<EscapeCtrl>k__BackingField") end)
+            if ec and pcall(function() ec:call("set_IsNoEscape(System.Boolean)", true) end) then
+                t.noescape = true
+                K.SAFE.n = K.SAFE.n + 1
+                -- v1.9.186: IsNoEscape alone does NOT stop the flee (see the checkDecisionEscape hook above)
+                if K.SAFE.n <= 20 then log(t.name .. ": IsNoEscape set (the flee itself is blocked at checkDecisionEscape)") end
+            end
+        end
+        -- (2) unreachable reinforcements die rather than hang the Rancor
+        if config.stray_kill then
+            local hp = safe(function() return t.chara:get_Hit():call("get_Hp") end)
+            if hp and hp > 0 then
+                if not vortex_now then
+                    if vortex_ended_at and now - vortex_ended_at > 10 and (t.spawned_at or 0) < vortex_ended_at then
+                        if K.SAFE.kill(t, "still alive after the Rancor ended") then tracked[addr] = nil; scaled[addr] = nil end
+                    end
+                elseif t.go then
+                    local up = upos_go(t.go)
+                    local fd = up and c and flat_dist(up, c)
+                    local pd = up and pp and flat_dist(up, pp)
+                    local hgt = up and c and (up.y - c.y)
+                    -- flyers roam and climb on purpose, so they get half again as much room
+                    local rf = reinforcement_for(t.name)
+                    local ml = (rf and rf.can_fly) and 1.5 or 1.0
+                    local lim, hmax = lim * ml, hmax * ml
+                    local gone = (fd and fd > lim and (not pd or pd > lim)) or (hgt and hgt > hmax) or false
+                    if gone then
+                        if t.name:sub(1, #K.EYE_ID) == K.EYE_ID then eye_gone = true end
+                        t.stray_since = t.stray_since or now
+                        if now - t.stray_since > secs then
+                            K.SAFE.kill(t, string.format("%.0f m outside the arena (limit %.0f), %.0f m up, for %.0f s",
+                                fd or -1, lim, hgt or 0, now - t.stray_since))
+                            t.stray_since = now   -- if it somehow survived, try again in stray_secs
+                        end
+                    else
+                        t.stray_since = nil
+                    end
+                end
+            end
+        end
+    end
+    K.SAFE.eye_gone = eye_gone
+end
+-- v1.9.186 - CORRECTION. v1.9.185 claimed IsNoEscape stops the flee. Decompiling DD2.exe (Ghidra, addresses
+-- taken live from REFramework and mapped with the module base from its own log) shows it does not:
+--
+--   EscapeController.update:
+--       if (guard_on_owner(Owner)) return;                 // Character+0x148 / +0xd0c, not IsNoEscape
+--       if (checkDecisionEscape(this) && !IsDecisionEscape) {
+--           IsDecisionEscape = true;  EscapeState = 1 or 3; // written DIRECTLY - requestEscape is never called
+--       }
+--
+--   EscapeController.checkDecisionEscape:
+--       if (EscapeParam != null && EscapeParam.IsEscapeChara &&        // EscapeParameter+0x65
+--           Owner.TensionCtrl[0x78] &&                                 // Character+0x448
+--           Owner.TensionCtrl[0x38] <= EscapeParam.EscapeThresholdTension)   // the real decision: TENSION
+--               ... IsSpecialEscapeCondition handlers, then return true
+--
+-- Nothing in that path reads IsNoEscape (EscapeController+0x65), and nothing calls requestEscape, so both of
+-- v1.9.185's mechanisms were inert. The decision is tension against EscapeThresholdTension, not HP.
+-- The fix that does work: overrule checkDecisionEscape itself, per instance, for monsters this mod spawned.
+-- EscapeParameter is shared per character type, so IsEscapeChara / EscapeThresholdTension are NOT touched -
+-- that would change every world enemy of that type too (the mistake avoided with Medusa's think table).
+do
+    local td = sdk.find_type_definition("app.EscapeController")
+    local m = td and td:get_method("checkDecisionEscape")
+    if m then
+        local ok = pcall(sdk.hook, m,
+            function(args)
+                local st = thread.get_hook_storage()
+                st["rr_noesc"] = nil
+                if not (config.enabled and config.no_escape) then return end
+                local this = safe(function() return sdk.to_int64(args[2]) end)
+                local t = this and tracked_sub[this]
+                if t then st["rr_noesc"] = t.name end
+            end,
+            function(retval)
+                local st = thread.get_hook_storage()
+                local nm = st and st["rr_noesc"]
+                if nm then
+                    st["rr_noesc"] = nil
+                    if retval ~= nil and (sdk.to_int64(retval) & 0xFF) ~= 0 then
+                        K.SAFE.esc_no = (K.SAFE.esc_no or 0) + 1
+                        if K.SAFE.esc_no <= 10 then
+                            log_now(nm .. ": its tension reached the escape threshold and it decided to flee - overruled")
+                        end
+                        return sdk.to_ptr(0)
+                    end
+                end
+                return retval
+            end)
+        if not ok then log("Could not hook app.EscapeController.checkDecisionEscape - reinforcements may flee") end
+    else
+        log("app.EscapeController.checkDecisionEscape not found - reinforcements may flee")
+    end
+end
+-- Kept from v1.9.185 as a second line: a think-table action CAN still call requestEscape directly, and that
+-- path does not go through checkDecisionEscape. IsNoEscape is still set (harmless, and the destroy check and
+-- some AI rows do read it) but it is no longer relied on.
+do
+    local td = sdk.find_type_definition("app.EscapeController")
+    local m = td and td:get_method("requestEscape(app.EscapeController.EscapeStateEnum)")
+    if m then
+        local ok = pcall(sdk.hook, m, function(args)
+            if not (config.enabled and config.no_escape) then return end
+            local this = safe(function() return sdk.to_int64(args[2]) end)
+            local t = this and tracked_sub[this]
+            if not t then return end
+            K.SAFE.esc = (K.SAFE.esc or 0) + 1
+            if K.SAFE.esc <= 10 then log_now(t.name .. ": tried to flee the arena - stopped (requestEscape)") end
+            return sdk.PreHookResult.SKIP_ORIGINAL
+        end, nil)
+        if not ok then log("Could not hook app.EscapeController.requestEscape") end
+    else
+        log("app.EscapeController.requestEscape not found - relying on IsNoEscape alone")
+    end
+end
+-- most eyeball minions alive at once (counted in K.eye_minion_tick, which already walks them)
+function K.swarm_full()
+    local cap = tonumber(config.eye_swarm_max) or 24
+    if cap <= 0 then return false end
+    return (K.EYEMIN and (K.EYEMIN.live or 0) or 0) >= cap
 end
 -- v1.9.169 (user 13:28): its "tentacles into the ground" move, kept and steered into the arena. The move asks
 -- app.Ch270PartsWarpController.requestWarp(WarpRequest) for N tentacle copies (ch2700xx_00). Request types:
@@ -8984,7 +9297,9 @@ local function find_and_scale_new()
                 if jump and jump > 25 then
                     local d = dist3(pos, vortex_center)
                     log(string.format("JUMP %s moved %.0f m in 1 s (now %.0f m from vortex center)", name, jump, d or -1))
-                elseif now - t.last_report >= 15 then
+                elseif not K.RELEASE and now - t.last_report >= 15 then
+                    -- v1.9.185b: dev build only. In a real fight this one line was 52 of the log's 86 lines;
+                    -- it says nothing a bug report needs, and the release log is for bug reports.
                     local d = dist3(pos, vortex_center)
                     log(string.format("Track %s: %s, %.0f m from vortex center", name, hp_report(t.chara), d or -1))
                     t.last_report = now
@@ -9004,12 +9319,39 @@ local function find_and_scale_new()
         end
         for _, r in ipairs(REINFORCEMENTS) do if r.max_alive then r.alive_n = n[r.key] or 0 end end
     end
+    -- v1.9.190 (user 20:02, "the first two bosses died on their own"): 19:49:25 a Gagana and a Nasty Dragon
+    -- were both killed in the SAME frame by v1.9.185's "left the scene" rule. They had not left: K.SAFE.kill
+    -- only reports a kill when it reads live HP above zero, so both objects were alive and valid - the
+    -- component scan just missed them for one frame. One bad scan must never kill a boss the player is
+    -- fighting. Three guards now: every tracked reinforcement vanishing at once is treated as a bad scan;
+    -- an object that still reports Valid did not leave; and anything else must stay missing for
+    -- stray_gone_secs before it is given up on.
+    local miss_n, track_n = 0, 0
+    for addr in pairs(tracked) do
+        track_n = track_n + 1
+        if not present[addr] then miss_n = miss_n + 1 end
+    end
+    local bad_scan = miss_n > 1 and miss_n >= track_n
+    if bad_scan and not K.SCAN_WARN then
+        K.SCAN_WARN = true
+        log(string.format("Scan miss: all %d tracked reinforcements were absent from one scan - treated as a bad scan, none killed", miss_n))
+    end
     for addr, t in pairs(tracked) do
-        if not present[addr] then
-            log(string.format("LEFT SCENE: %s (last seen %.0f m from vortex center, vortex %s)", t.name,
-                dist3(t.last_pos, vortex_center) or -1, vortex_now and "active" or "over"))
-            tracked[addr] = nil; scaled[addr] = nil
-        elseif not vortex_now and vortex_ended_at and t.spawned_at < vortex_ended_at and not removed[addr] then
+        if present[addr] then t.gone_since = nil end
+        if not present[addr] and not bad_scan then
+            local still_valid = t.go and safe(function() return t.go:call("get_Valid") end) == true
+            if still_valid then
+                t.gone_since = nil   -- its object is alive; the scan simply missed it this frame
+            else
+                t.gone_since = t.gone_since or now
+                if now - t.gone_since >= (tonumber(config.stray_gone_secs) or 15) then
+                    log(string.format("LEFT SCENE: %s (last seen %.0f m from vortex center, vortex %s, gone %.0f s)", t.name,
+                        dist3(t.last_pos, vortex_center) or -1, vortex_now and "active" or "over", now - t.gone_since))
+                    if vortex_now and config.stray_kill then pcall(K.SAFE.kill, t, "left the scene while the Rancor was still going") end
+                    tracked[addr] = nil; scaled[addr] = nil
+                end
+            end
+        elseif present[addr] and not vortex_now and vortex_ended_at and t.spawned_at < vortex_ended_at and not removed[addr] then
             removed[addr] = true
             log(string.format("Leftover after vortex: %s (%s)", t.name, hp_report(t.chara)))
             if config.cleanup_leftovers then remove_monster(t.go, t.chara, t.name, "leftover") end
@@ -9087,6 +9429,10 @@ do
             if SAFE_RET[ret] then
                 local ok = pcall(sdk.hook, m, function(args)
                     if not (config.enabled and config.eye_keep_alive and vortex_now) then return end
+                    -- v1.9.185: let go of it once holding the Rancor's end has timed out, or once it has
+                    -- drifted out of the arena. A kept Eye whose Rancor has been torn down around it is the
+                    -- "still alive and floating on the lake, until the game crashed" report.
+                    if (K.HOLD and K.HOLD.timed_out) or (K.SAFE and K.SAFE.eye_gone) then return end
                     local info = safe(function() return sdk.to_managed_object(args[idx]) end)
                     local cid = info and safe(function() return info._CommonInfo._ObjectID._SelectedCharacterID end)
                     if cid ~= id_value[K.EYE_ID] or not eye_alive() then return end
@@ -9104,7 +9450,7 @@ do
                 end)
                 if ok then keep_hooks = keep_hooks + 1 end
             end
-            log("requestDestroy(container) returns " .. ret .. (SAFE_RET[ret] and " - hooked" or " - not hooked (unsafe to skip)"))
+            if not K.RELEASE then log("requestDestroy(container) returns " .. ret .. (SAFE_RET[ret] and " - hooked" or " - not hooked (unsafe to skip)")) end
         end
     end
 end
@@ -9113,7 +9459,7 @@ do
     for _, f in ipairs(POS_TD and safe(function() return POS_TD:get_fields() end) or {}) do
         table.insert(names, f:get_name() .. ":" .. (safe(function() return f:get_type():get_full_name() end) or "?"))
     end
-    log("via.Position fields: " .. table.concat(names, ", "))
+    if not K.RELEASE then log("via.Position fields: " .. table.concat(names, ", ")) end
 end
 
 -- Main loop ---------------------------------------------------------------------------
@@ -10664,7 +11010,7 @@ function PURG.dragon_tick()
         local name = go and safe(function() return go:call("get_Name") end)
         -- v1.9.120: world Dragons are only touched by the Enemy Spawner option or the dev build's watcher
         local mine = name and K.TRACKED and K.TRACKED[go:get_address()]
-        if not K.RELEASE and name and K.MOVE_WATCH[name:sub(1, 8)] then pcall(PURG.watch_seen, m, go, name, now, mine) end
+        if not K.RELEASE and config.move_watch and name and K.MOVE_WATCH[name:sub(1, 8)] then pcall(PURG.watch_seen, m, go, name, now, mine) end
         if name and name:sub(1, 8) == "ch258000" and not mine and not config.dragon_spawner_stats and (K.RELEASE or not config.purgener_watch) then name = nil end
         if name and name:sub(1, 8) == "ch258000" then
             local addr = go:get_address()
@@ -10810,8 +11156,8 @@ re.on_frame(function()
     frame_no = frame_no + 1
     if config.enabled and (config.purgener_watch or K.RELEASE) then pcall(PURG.tick) end
     if config.enabled and (config.purgener_watch or config.dragon_spawner_stats or K.RELEASE) then pcall(PURG.dragon_tick) end
-    if not K.RELEASE and next(PURG.watch) then pcall(PURG.watch_frame) end
-    if not K.RELEASE then pcall(K.gag_rows_frame, os.clock()) end
+    if not K.RELEASE and config.move_watch and next(PURG.watch) then pcall(PURG.watch_frame) end
+    if not K.RELEASE and config.move_watch then pcall(K.gag_rows_frame, os.clock()) end
     if TEST.waiting then pcall(TEST.tick) end
     if TEST.here and os.clock() - (TEST.here_t or 0) > 300 then
         log("Test spawn: no monster spawned near you in 5 minutes - cancelled (" .. TEST.here .. ")")
@@ -10825,10 +11171,12 @@ re.on_frame(function()
     if config.enabled then pcall(K.eye_phase_tick, os.clock()) end
     if config.enabled then pcall(K.eye_revive_tick, os.clock()) end
     if config.enabled then pcall(K.eye_minion_tick, os.clock()) end   -- v1.9.168
+    if config.enabled then pcall(K.SAFE.tick, os.clock()) end         -- v1.9.185
     if #deferred > 0 then pcall(run_deferred) end
-    if log_dirty and os.clock() - last_log_write >= 2.0 then
+    if log_dirty and os.clock() - last_log_write >= 2.0 then   -- v1.9.188: back to 2 s (appends cost 0.6 ms)
         last_log_write = os.clock(); log_dirty = false
-        pcall(fs.write, K.LOG_FILE, table.concat(file_lines, "\n"))
+        K.WRITE_LOG = K.log_on()   -- v1.9.185: release writes nothing unless the box is ticked
+        pcall(log_flush)                          -- v1.9.185b: appends the new lines only
     end
     if not config.enabled then
         if #pending_reverts > 0 then pcall(revert_swaps, true) end
@@ -10895,6 +11243,7 @@ re.on_draw_ui(function()
     changed, config.purgener_pillar = imgui.checkbox("Place the climbable pillar next to a Purgener", config.purgener_pillar); any = any or changed
     if not K.RELEASE then
     changed, config.purgener_study = imgui.checkbox("Log a Purgener's AI decisions (think rows, conditions)", config.purgener_study); any = any or changed
+    changed, config.move_watch = imgui.checkbox("Log every new move / AI row for Griffin, Gagana, Evil Eye and the Liches (heavy)", config.move_watch); any = any or changed
     local own_p = (tonumber(config.purgener_pillar_gid) or 408) ~= 235
     changed, own_p = imgui.checkbox("Purgener uses its own big pillar (gimmick 408 - looks right, but it can't climb it yet)", own_p)
     if changed then config.purgener_pillar_gid = own_p and 408 or 235; any = true end
@@ -11043,7 +11392,21 @@ re.on_draw_ui(function()
     changed, config.eye_down_anim = imgui.slider_float("Evil Eye: fall / get-up animation speed while down", config.eye_down_anim, 1, 5); any = any or changed
     changed, config.eye_revive_resist = imgui.slider_float("Evil Eye: damage taken while regrowing tentacles is reduced by", config.eye_revive_resist, 0, 0.95); any = any or changed
     changed, config.eye_tele_phase = imgui.checkbox("Evil Eye teleport phase: hunts you and each pawn, attacks between teleports, regrows at the end", config.eye_tele_phase); any = any or changed
+    changed, config.finale_takes_last_boss = imgui.checkbox("Finale bosses can take ANY last boss the Rancor uses (not only the ice dragon)", config.finale_takes_last_boss); any = any or changed
     changed, config.eye_swarm = imgui.checkbox("Evil Eye swarm: while it lives, every small Rancor enemy becomes its eyeball minion (they die with it)", config.eye_swarm); any = any or changed
+    if config.eye_swarm then
+        changed, config.eye_swarm_max = imgui.slider_int("  Most eyeballs alive at once", config.eye_swarm_max, 4, 60); any = any or changed
+    end
+    -- v1.9.185 (Nexus crash reports)
+    changed, config.no_escape = imgui.checkbox("Reinforcements never flee the arena (fixes the Evil Eye crashing when its health is low)", config.no_escape); any = any or changed
+    changed, config.stray_kill = imgui.checkbox("A reinforcement that gets away from the arena dies instead of hanging the Rancor", config.stray_kill); any = any or changed
+    if config.stray_kill then
+        changed, config.stray_dist = imgui.drag_float("  Too far from the arena (m)", config.stray_dist, 1, 60, 500); any = any or changed
+        changed, config.stray_dist_devour = imgui.drag_float("  ...in the Devouring Rancor (m)", config.stray_dist_devour, 1, 100, 800); any = any or changed
+        changed, config.stray_height = imgui.drag_float("  ...or this high above it (m)", config.stray_height, 1, 40, 400); any = any or changed
+        changed, config.stray_secs = imgui.drag_float("  ...for this long (s)", config.stray_secs, 0.5, 3, 60); any = any or changed
+    end
+    changed, config.write_log = imgui.checkbox("Write an event log to data/RancorReinforcements_log.txt (off unless a bug report needs it)", config.write_log); any = any or changed
     changed, config.eye_arrival_minions = imgui.slider_int("Evil Eye: extra minions when it arrives (from the next small spawns)", config.eye_arrival_minions, 0, 8); any = any or changed
     changed, config.eye_parts_arena = imgui.checkbox("Evil Eye ground tentacles come up inside the arena (off: that move's tentacles are cancelled)", config.eye_parts_arena); any = any or changed
     changed, config.gagana_swoops = imgui.checkbox("Gagana: allow its swoop attacks in Rancors", config.gagana_swoops); any = any or changed
