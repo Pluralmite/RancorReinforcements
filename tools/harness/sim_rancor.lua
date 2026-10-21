@@ -9,6 +9,9 @@ local IDS = {
     "Invalid", "ch261000_00", "ch254001_60", "ch226003_60", "ch227002_00", "ch227003_00", "ch231000_00", "ch226002_60",
     "ch257003_10", "ch261001_00", "ch253000_60", "ch270000_00", "ch255000_01", "ch253012_00", "ch257001_00",
     "ch255010_00", "ch258000_10", "ch252000_00", "ch271000_00", "ch272002_00", "ch223003_00", "ch226003_50", "ch227000_10", "ch257000_00", "ch257000_50", "ch253010_00", "ch221006_00", "ch272000_00", "ch256001_50", "ch251001_50",
+    -- these five reinforcements existed in the script but not here, so the simulator could never produce them:
+    -- Hydra, Brine Golem, Brine Sphinx, Brine Dullahan, Brine Cyclops
+    "ch255000_90", "ch252000_13", "ch253001_50", "ch229000_50", "ch250000_51",
 }
 -- v1.9.124: extra IDs from the realistic layouts (set by run_sim.py before this file runs)
 do
@@ -29,12 +32,31 @@ M.native["via.SceneManager"] = M.obj("via.SceneManager")
 M.method_results["native.get_CurrentScene()"] = function() return scene end
 SIM.vortex = false
 local vortex_go = M.obj("via.GameObject")
-vortex_go.__f.__name = "Vortex_Rancor_00"
+-- must be a name the script actually looks up: K.VORTEX_NAMES = { "15_CS_Vortexrage" }
+vortex_go.__f.__name = "15_CS_Vortexrage"
 M.method_results["via.GameObject.get_Name"] = function(self) return self.__f.__name end
-M.method_results["via.GameObject.get_Valid"] = true
+-- v1.9.102+ caches the vortex GameObject and re-checks get_Valid before rescanning. A literal `true` here
+-- meant the cached object stayed valid forever, so the vortex never ENDED: refresh_vortex never saw the
+-- transition, never reset `event`, and the per-Rancor reinforcement quota was spent on fight 1 and never
+-- replenished. Variants and finale rolls kept working because they do not draw on that quota, which is
+-- exactly why the aggregate showed ~50% Brine variants next to ~0% pool picks.
+M.method_results["via.GameObject.get_Valid"] = function(self)
+    if self == vortex_go then return SIM.vortex and true or false end
+    return true
+end
 local vortex_tr = M.obj("via.Transform")
 M.method_results["via.Transform.get_GameObject"] = function(self) return self.__f.go end
 vortex_tr.__f.go = vortex_go
+-- v1.9.156 replaced the full-scene Transform scan with a direct name lookup. The mock did not implement it,
+-- so pcall failed, K.FIND_GO went false and NO vortex was ever detected - every simulated fight since has
+-- swapped nothing while still reporting "0 errors". This is that lookup.
+SIM.vortex_names = { ["15_CS_Vortexrage"] = true }
+M.method_results["via.Scene.findGameObject(System.String)"] = function(self, nm)
+    if not SIM.vortex then return nil end
+    nm = tostring(nm)
+    if SIM.vortex_names[nm] or nm == vortex_go.__f.__name then return vortex_go end
+    return nil
+end
 M.method_results["via.Scene.findComponents(System.Type)"] = function(self, t)
     local tn = t and t.__f and t.__f.name
     local list = {}
@@ -57,6 +79,14 @@ SIM.void_id = -1
 M.singletons["app.AppraiseCycleManager"] = M.obj("app.AppraiseCycleManager")
 M.method_results["app.AppraiseCycleManager.get_ProcessingVoidEventID"] = function() return SIM.void_id end
 M.method_results["app.AppraiseCycleManager.get_IsProcessingHighLevelVoid"] = function() return SIM.void_id == 3606 end
+-- v1.9.187: the game's own classification + its "I am building the last boss wave" flag
+M.method_results["app.AppraiseCycleManager.isProcessingHighLevelVoidBattle"] = function() return SIM.void_id == 3606 end
+M.method_results["app.AppraiseCycleManager.isMiddleVoidEvent"] = function(_, id)
+    id = tonumber(id) or SIM.void_id
+    return id ~= 3606 and id >= 0 and (id % 100) >= 50
+end
+SIM.last_boss_node = false
+M.method_results["app.AppraiseCycleManager.get_IsProcessingVoidLastBossNode"] = function() return SIM.last_boss_node end
 
 -- the game's "Death defeated" check (DefeatCh227003Condition.evaluateImpl): run the script's post hook on `game_says`
 function SIM.death_check(game_says)
@@ -80,7 +110,9 @@ function SIM.fight_layout(waves, void_id, devour)
     SIM.advance(2)
     local fight = { swaps = {}, n = 0 }
     local recs = {}
-    for _, wave in ipairs(waves) do
+    for wi, wave in ipairs(waves) do
+        -- the game raises this while it builds the Rancor's final boss wave
+        SIM.last_boss_node = (wi == #waves)
         for _, slot in ipairs(wave) do
             local got, info, idobj = SIM.request(slot)
             if got ~= slot then fight.n = fight.n + 1; fight.swaps[#fight.swaps + 1] = slot .. ">" .. got end
@@ -92,6 +124,7 @@ function SIM.fight_layout(waves, void_id, devour)
     for _, r in ipairs(recs) do
         if SIM.names[r.idobj.__f._SelectedCharacterID] ~= r.orig then SIM.unrestored = (SIM.unrestored or 0) + 1 end
     end
+    SIM.last_boss_node = false
     fight.death_after = SIM.death_check(false)
     SIM.vortex = false
     SIM.void_id = -1

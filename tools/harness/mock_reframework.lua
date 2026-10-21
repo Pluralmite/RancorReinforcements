@@ -268,6 +268,40 @@ end })
 fs = {}
 function fs.write(name, text) M.writes[#M.writes + 1] = name; M.files[name] = tostring(text) end
 function fs.read(name) return M.files[name] end
+
+-- v1.9.185 made the script APPEND its event log with io.open(name, "a") instead of rewriting it with
+-- fs.write, so the mock stopped seeing it and "error lines in the mod's log" became vacuously 0.
+-- Route io.open on the script's own data files into M.files; everything else goes to the real io.
+do
+    local real_open = io.open
+    local function mine(n) return n:match("^RancorReinforcements") or n:match("^rr_") or n:match("^claude_") end
+    io.open = function(name, mode)
+        local n = tostring(name)
+        if not mine(n) then return real_open(name, mode) end
+        mode = tostring(mode or "r")
+        if mode:find("r") then
+            local cur = M.files[n]
+            if cur == nil then return nil end
+            local done = false
+            return {
+                read = function(_, fmt)
+                    if done then return nil end
+                    done = true
+                    return cur
+                end,
+                lines = function() local sent = false
+                    return function() if sent then return nil end; sent = true; return cur end end,
+                close = function() return true end,
+            }
+        end
+        if not mode:find("a") then M.files[n] = "" end
+        M.writes[#M.writes + 1] = n
+        return {
+            write = function(self, text) M.files[n] = (M.files[n] or "") .. tostring(text); return self end,
+            close = function() return true end,
+        }
+    end
+end
 function fs.glob() return {} end
 json = {}
 local function deep(v) if type(v) ~= "table" then return v end local o = {}; for k, x in pairs(v) do o[k] = deep(x) end; return o end
